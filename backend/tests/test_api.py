@@ -87,6 +87,63 @@ def test_api_run_analysis_compare_mode(client):
     assert data['benchmark']['speedup_factor'] is not None
 
 
+def test_api_run_analysis_compare_mode_mismatch_detection(monkeypatch, client):
+    """
+    Verifies that compare mode correctly detects differences in actual itemsets or
+    support counts, even when the overall itemset count is identical.
+    """
+    import backend.app as app_module
+
+    # Scenario A: Equal count, but different itemsets
+    def fake_run_fpgrowth_different_itemsets(baskets, min_support):
+        real_res = app_module.run_apriori(baskets, min_support=min_support)
+        modified_itemsets = [dict(x) for x in real_res["frequent_itemsets"]]
+        if modified_itemsets:
+            # Change items of the first itemset while keeping count unchanged
+            modified_itemsets[0]["items"] = ["FAKE_ITEM_DIFFERENT"]
+        return {
+            **real_res,
+            "algorithm": "FP-Growth",
+            "frequent_itemsets": modified_itemsets
+        }
+
+    monkeypatch.setattr(app_module, "run_fpgrowth", fake_run_fpgrowth_different_itemsets)
+    res = client.post('/api/run-analysis', json={
+        "preset": "toy_5",
+        "algorithm": "compare",
+        "min_support": 0.40,
+        "min_confidence": 0.50,
+        "min_lift": 1.0
+    })
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data['benchmark']['itemsets_match'] is False
+
+    # Scenario B: Same itemsets, but different support count
+    def fake_run_fpgrowth_different_counts(baskets, min_support):
+        real_res = app_module.run_apriori(baskets, min_support=min_support)
+        modified_itemsets = [dict(x) for x in real_res["frequent_itemsets"]]
+        if modified_itemsets:
+            modified_itemsets[0]["support_count"] = modified_itemsets[0]["support_count"] + 999
+        return {
+            **real_res,
+            "algorithm": "FP-Growth",
+            "frequent_itemsets": modified_itemsets
+        }
+
+    monkeypatch.setattr(app_module, "run_fpgrowth", fake_run_fpgrowth_different_counts)
+    res_b = client.post('/api/run-analysis', json={
+        "preset": "toy_5",
+        "algorithm": "compare",
+        "min_support": 0.40,
+        "min_confidence": 0.50,
+        "min_lift": 1.0
+    })
+    assert res_b.status_code == 200
+    data_b = res_b.get_json()
+    assert data_b['benchmark']['itemsets_match'] is False
+
+
 def test_api_run_analysis_invalid_parameters(client):
     # 1. Invalid algorithm
     res_algo = client.post('/api/run-analysis', json={"algorithm": "invalid_algo"})

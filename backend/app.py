@@ -200,8 +200,16 @@ def run_analysis():
             fp_time = max(fpgrowth_res["execution_time_seconds"], 0.0001)
             benchmark_metrics["speedup_factor"] = round(apriori_res["execution_time_seconds"] / fp_time, 2)
 
-            # Verify identical itemset counts
-            benchmark_metrics["itemsets_match"] = (apriori_res["itemset_count"] == fpgrowth_res["itemset_count"])
+            # Verify identical itemsets and exact support counts independently of list ordering
+            apriori_itemset_map = {
+                frozenset(x["items"]): x["support_count"]
+                for x in apriori_res.get("frequent_itemsets", [])
+            }
+            fpgrowth_itemset_map = {
+                frozenset(x["items"]): x["support_count"]
+                for x in fpgrowth_res.get("frequent_itemsets", [])
+            }
+            benchmark_metrics["itemsets_match"] = (apriori_itemset_map == fpgrowth_itemset_map)
 
             # Use fpgrowth result for rule generation
             itemsets_result = fpgrowth_res
@@ -326,5 +334,7 @@ def export_rules():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    print(f"Starting Retail Market Basket Analysis Flask Server on port {port}...")
-    app.run(host="127.0.0.1", port=port, debug=True)
+    host = os.environ.get("HOST", "127.0.0.1")
+    debug_mode = os.environ.get("FLASK_DEBUG", "True").lower() in ("true", "1", "yes")
+    print(f"Starting Retail Market Basket Analysis Flask Server on http://{host}:{port} (debug={debug_mode})...")
+    app.run(host=host, port=port, debug=debug_mode)

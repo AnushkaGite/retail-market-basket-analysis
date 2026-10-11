@@ -151,20 +151,6 @@ export default function App() {
     }
   };
 
-  // Export Association Rules to CSV Handler
-  const handleExportCSV = async () => {
-    const rulesToExport = filteredRules.length > 0 ? filteredRules : activeRules;
-    if (!rulesToExport.length || isExporting) return;
-    try {
-      setIsExporting(true);
-      await exportRulesToCSV(rulesToExport);
-    } catch (err) {
-      setServerError(`CSV export failed: ${err.message}`);
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
   // Derived filtered rules based on product search
   const activeRules = analysisResult?.association_rules?.rules || [];
   const filteredRules = activeRules.filter(r => {
@@ -175,6 +161,25 @@ export default function App() {
       r.consequent.some(item => item.toLowerCase().includes(query))
     );
   });
+
+  // Export Association Rules to CSV Handler
+  const handleExportCSV = async () => {
+    const hasSearch = ruleSearch.trim() !== '';
+    if (hasSearch && filteredRules.length === 0) {
+      setServerError('No matching rules found to export for the current search filter.');
+      return;
+    }
+    const rulesToExport = hasSearch ? filteredRules : activeRules;
+    if (!rulesToExport.length || isExporting) return;
+    try {
+      setIsExporting(true);
+      await exportRulesToCSV(rulesToExport);
+    } catch (err) {
+      setServerError(`CSV export failed: ${err.message}`);
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
   // Derived filtered itemsets based on product search
   const activeItemsets = analysisResult?.frequent_itemsets?.itemsets || [];
@@ -644,7 +649,7 @@ export default function App() {
                   <button
                     className="btn-export"
                     onClick={handleExportCSV}
-                    disabled={isExporting || activeRules.length === 0}
+                    disabled={isExporting || (ruleSearch.trim() !== '' ? filteredRules.length === 0 : activeRules.length === 0)}
                   >
                     <Download size={15} />
                     {isExporting ? 'Exporting...' : 'Export CSV'}

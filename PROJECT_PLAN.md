@@ -53,7 +53,15 @@
   - Interactive controls, comparison charts, searchable tables, CSV export in `frontend/src/App.jsx`.
 
 - [x] **Phase 9: End-to-End Verification and Assignment Finalization** (Completed)
-  - All 23 backend tests passed.
+  - Backend tests passed.
   - Production frontend build verified (`dist/`).
   - Live HTTP integration verified for all endpoints and comparison benchmarks.
   - Original raw CSV verified untouched (94,850,204 bytes).
+
+- [x] **Phase 10: Source Review Refinements & Documentation** (Completed)
+  - Fixed algorithm comparison in `backend/app.py`: switched `itemsets_match` from simple count equality to strict, order-independent verification of frequent itemsets and exact support counts between Apriori and FP-Growth. Added mismatch detection unit tests.
+  - Fixed CSV export in `frontend/src/App.jsx`: export strictly honors the active search query and exports filtered rules; raises a helpful user notification and disables export if 0 search matches occur; exports all rules when search is empty.
+  - Full backend test suite passing: 25 of 25 tests passed in 1.95s.
+  - Frontend production build verified (`npm run build` succeeds cleanly in 765ms).
+  - Comprehensive documentation generated in `README.md`.
+
