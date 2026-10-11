@@ -12,7 +12,11 @@ import {
   Database,
   ArrowRight,
   Sparkles,
-  BarChart2
+  BarChart2,
+  CheckCircle2,
+  Search,
+  Filter,
+  Info
 } from 'lucide-react';
 import {
   BarChart,
@@ -32,49 +36,102 @@ import {
 } from './api/client';
 
 export default function App() {
-  // State for dataset metadata
+  // Backend dataset metadata state
   const [datasetInfo, setDatasetInfo] = useState(null);
   const [loadingDataset, setLoadingDataset] = useState(true);
 
-  // Form Controls
+  // Analysis Configuration States
   const [selectedPreset, setSelectedPreset] = useState('sample_1.7k');
   const [selectedAlgo, setSelectedAlgo] = useState('compare');
-  const [minSupport, setMinSupport] = useState(2.0); // stored as percentage in UI
-  const [minConfidence, setMinConfidence] = useState(50.0); // stored as percentage
-  const [minLift, setMinLift] = useState(1.2);
+  
+  // Exact numeric input values
+  const [minSupport, setMinSupport] = useState('2.0');
+  const [minConfidence, setMinConfidence] = useState('50.0');
+  const [minLift, setMinLift] = useState('1.2');
 
-  // Analysis Results
+  // Input validation error states
+  const [inputErrors, setInputErrors] = useState({});
+
+  // Analysis Execution States
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [analysisResult, setAnalysisResult] = useState(null);
-  const [errorMessage, setErrorMessage] = useState(null);
+  const [serverError, setServerError] = useState(null);
 
-  // Search & Filter in Tables
+  // Search & Filter state for rules table
   const [ruleSearch, setRuleSearch] = useState('');
   const [itemsetSearch, setItemsetSearch] = useState('');
 
-  // Initial load: Fetch dataset info
+  // Initial load: Fetch real dataset metadata
   useEffect(() => {
-    async function init() {
+    async function loadDataset() {
       try {
         setLoadingDataset(true);
         const data = await fetchDatasetInfo();
         setDatasetInfo(data);
-        setErrorMessage(null);
+        setServerError(null);
       } catch (err) {
-        setErrorMessage(`Backend API connection error: ${err.message}. Please ensure Flask is running.`);
+        setServerError(`Unable to connect to Flask backend (${err.message}). Ensure backend server is running.`);
       } finally {
         setLoadingDataset(false);
       }
     }
-    init();
+    loadDataset();
   }, []);
+
+  // Update default recommended thresholds when user changes dataset preset
+  const handlePresetChange = (presetId) => {
+    setSelectedPreset(presetId);
+    if (presetId === 'toy_5') {
+      setMinSupport('60.0');
+      setMinConfidence('70.0');
+      setMinLift('1.0');
+    } else if (presetId === 'full_36k') {
+      setMinSupport('1.0');
+      setMinConfidence('50.0');
+      setMinLift('1.2');
+    } else {
+      setMinSupport('2.0');
+      setMinConfidence('50.0');
+      setMinLift('1.2');
+    }
+    setInputErrors({});
+  };
+
+  // Live input validation helper
+  const validateInputs = () => {
+    const errors = {};
+
+    const supNum = parseFloat(minSupport);
+    if (isNaN(supNum) || supNum <= 0 || supNum > 100) {
+      errors.support = 'Must be between 0.01% and 100%';
+    }
+
+    const confNum = parseFloat(minConfidence);
+    if (isNaN(confNum) || confNum <= 0 || confNum > 100) {
+      errors.confidence = 'Must be between 0.01% and 100%';
+    }
+
+    const liftNum = parseFloat(minLift);
+    if (isNaN(liftNum) || liftNum < 0) {
+      errors.lift = 'Must be 0.0 or greater';
+    }
+
+    setInputErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
 
   // Run Market Basket Analysis Handler
   const handleRunAnalysis = async () => {
+    if (isAnalyzing) return; // Prevent duplicate concurrent submissions
+
+    if (!validateInputs()) {
+      return;
+    }
+
     try {
       setIsAnalyzing(true);
-      setErrorMessage(null);
+      setServerError(null);
 
       const params = {
         preset: selectedPreset,
@@ -87,165 +144,244 @@ export default function App() {
       const result = await runMarketBasketAnalysis(params);
       setAnalysisResult(result);
     } catch (err) {
-      setErrorMessage(err.message || 'An error occurred during analysis.');
+      setServerError(err.message || 'An unexpected error occurred during analysis.');
       setAnalysisResult(null);
     } finally {
       setIsAnalyzing(false);
     }
   };
 
-  // CSV Export Handler
+  // Export Association Rules to CSV Handler
   const handleExportCSV = async () => {
-    if (!analysisResult?.association_rules?.rules?.length) return;
+    const rulesToExport = filteredRules.length > 0 ? filteredRules : activeRules;
+    if (!rulesToExport.length || isExporting) return;
     try {
       setIsExporting(true);
-      await exportRulesToCSV(analysisResult.association_rules.rules);
+      await exportRulesToCSV(rulesToExport);
     } catch (err) {
-      setErrorMessage(`CSV export failed: ${err.message}`);
+      setServerError(`CSV export failed: ${err.message}`);
     } finally {
       setIsExporting(false);
     }
   };
 
-  // Derived filtered tables
-  const filteredRules = (analysisResult?.association_rules?.rules || []).filter(r => {
-    const q = ruleSearch.toLowerCase();
+  // Derived filtered rules based on product search
+  const activeRules = analysisResult?.association_rules?.rules || [];
+  const filteredRules = activeRules.filter(r => {
+    const query = ruleSearch.trim().toLowerCase();
+    if (!query) return true;
     return (
-      r.antecedent.some(item => item.toLowerCase().includes(q)) ||
-      r.consequent.some(item => item.toLowerCase().includes(q))
+      r.antecedent.some(item => item.toLowerCase().includes(query)) ||
+      r.consequent.some(item => item.toLowerCase().includes(query))
     );
   });
 
-  const filteredItemsets = (analysisResult?.frequent_itemsets?.itemsets || []).filter(item => {
-    const q = itemsetSearch.toLowerCase();
-    return item.items.some(name => name.toLowerCase().includes(q));
+  // Derived filtered itemsets based on product search
+  const activeItemsets = analysisResult?.frequent_itemsets?.itemsets || [];
+  const filteredItemsets = activeItemsets.filter(itemset => {
+    const query = itemsetSearch.trim().toLowerCase();
+    if (!query) return true;
+    return itemset.items.some(name => name.toLowerCase().includes(query));
   });
 
-  // Visualization Data Preparation
-  const chartBenchmarkData = analysisResult?.benchmark?.apriori_time_seconds != null
+  // Benchmark chart data
+  const chartBenchmarkData = (analysisResult?.benchmark?.apriori_time_seconds != null && analysisResult?.benchmark?.fpgrowth_time_seconds != null)
     ? [
         {
           algorithm: 'Apriori',
           'Execution Time (s)': analysisResult.benchmark.apriori_time_seconds,
-          fill: '#f97316'
+          fill: '#4338ca'
         },
         {
           algorithm: 'FP-Growth',
           'Execution Time (s)': analysisResult.benchmark.fpgrowth_time_seconds,
-          fill: '#059669'
+          fill: '#0d9488'
         }
       ]
     : [];
 
-  // Top 8 rules by lift
-  const chartTopRules = (analysisResult?.association_rules?.rules || [])
+  // Top 8 rules by Lift for visualization
+  const chartTopRules = activeRules
     .slice(0, 8)
     .map((r, i) => ({
-      name: `R#${i + 1}: ${r.antecedent[0]?.slice(0, 14)}...`,
+      name: `R#${i + 1}: ${r.antecedent[0]?.slice(0, 16)}...`,
       lift: r.lift,
       confidence: r.confidence_percent
     }));
 
   return (
     <div>
-      {/* Top Navbar */}
+      {/* SECTION A: Brand Header & Navigation */}
       <nav className="navbar">
-        <div className="brand-container">
-          <div className="brand-icon-wrapper">
+        <div className="brand-wrapper">
+          <div className="brand-icon-box">
             <ShoppingBag size={22} />
           </div>
           <div>
-            <div className="brand-title">CartInsight Analytics</div>
-            <div className="brand-subtitle">Retail Market Basket Intelligence</div>
+            <div className="brand-name">CartInsight Analytics</div>
+            <div className="brand-tagline">Retail Market Basket Intelligence</div>
           </div>
         </div>
-        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
-          <span className="badge-tag">
-            <ShoppingCart size={14} /> E-Commerce Pattern Mining
+
+        <div className="nav-badges">
+          <span className="pill-badge primary">
+            <ShoppingCart size={13} /> E-Commerce Pattern Mining
           </span>
-          <span className="badge-tag" style={{ backgroundColor: '#f1f5f9', color: '#475569', borderColor: '#cbd5e1' }}>
+          <span className="pill-badge neutral">
             College Assignment Project
           </span>
         </div>
       </nav>
 
       <main className="app-container">
-        {/* Error Notification */}
-        {errorMessage && (
-          <div className="alert-error">
+        {/* Server or Connection Error Banner */}
+        {serverError && (
+          <div className="feedback-box error">
             <AlertCircle size={20} />
             <div>
-              <strong>Alert:</strong> {errorMessage}
+              <strong>Error Notice:</strong> {serverError}
             </div>
           </div>
         )}
 
-        {/* Hero Section */}
-        <section className="hero-card">
-          <div className="hero-content">
-            <h1 className="hero-title">Discover High-Value Cross-Sell Bundles</h1>
-            <p className="hero-desc">
-              Harness custom <strong>Apriori</strong> and <strong>FP-Growth</strong> algorithms to discover frequent itemsets
-              and calculate <em>Support</em>, <em>Confidence</em>, and <em>Lift</em> across retail transactions from the
-              Online Retail II dataset.
-            </p>
-            <div className="hero-stats-row">
-              <div className="hero-stat-pill">
-                <Database size={16} /> Dataset: <strong>Online Retail II (UCI)</strong>
+        {/* SECTION A Continued: Introduction Hero */}
+        <section className="hero-banner">
+          <div className="hero-header-line">
+            <Sparkles size={14} /> Market Basket Intelligence & Association Rules
+          </div>
+          <h1 className="hero-title">Discover High-Impact Product Bundles & Cross-Sell Opportunities</h1>
+          <p className="hero-subtitle">
+            Market Basket Analysis identifies products that customers frequently purchase together in retail transactions.
+            This system runs custom implementations of <strong>Apriori</strong> and <strong>FP-Growth</strong> to calculate
+            actual <em>Support</em>, <em>Confidence</em>, and <em>Lift</em> metrics directly from the Online Retail II dataset.
+          </p>
+
+          <div className="hero-highlights-grid">
+            <div className="hero-highlight-box">
+              <div className="hero-highlight-icon">
+                <Database size={16} />
               </div>
-              <div className="hero-stat-pill">
-                <Layers size={16} /> Total Records: <strong>1,067,371 rows</strong>
+              <div>
+                <div className="hero-highlight-title">Target Dataset</div>
+                <div className="hero-highlight-value">Online Retail II (UCI)</div>
               </div>
-              <div className="hero-stat-pill">
-                <TrendingUp size={16} /> Mined Baskets: <strong>36,307 cleaned</strong>
+            </div>
+
+            <div className="hero-highlight-box">
+              <div className="hero-highlight-icon">
+                <Layers size={16} />
+              </div>
+              <div>
+                <div className="hero-highlight-title">Full Transactions</div>
+                <div className="hero-highlight-value">1,067,371 records</div>
+              </div>
+            </div>
+
+            <div className="hero-highlight-box">
+              <div className="hero-highlight-icon">
+                <CheckCircle2 size={16} />
+              </div>
+              <div>
+                <div className="hero-highlight-title">Algorithm Validation</div>
+                <div className="hero-highlight-value">Pure Custom vs mlxtend</div>
               </div>
             </div>
           </div>
         </section>
 
-        {/* Controls Card */}
-        <section className="card">
-          <div className="section-header">
-            <div className="section-title">
-              <Sliders size={20} color="var(--primary)" />
-              Market Basket Configuration & Parameters
+        {/* SECTION B: Dataset Overview */}
+        <section className="section-card">
+          <div className="card-title-row">
+            <div className="card-title">
+              <Database className="card-title-icon" size={19} />
+              Dataset Overview & Transaction Repositories
             </div>
-            {datasetInfo && (
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                Backend Status: <strong style={{ color: '#16a34a' }}>Connected</strong>
-              </span>
-            )}
+            <span className="card-caption">Verified transactional statistics from backend API</span>
           </div>
 
-          <div className="controls-grid">
-            {/* Dataset Preset Selector */}
-            <div className="form-group">
-              <label className="form-label">
+          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '14px' }}>
+            The raw Online Retail II dataset contains international gift and lifestyle retail transactions. Preprocessing filters cancelled invoices, removes invalid quantities, and groups products into unique shopping baskets. Select an evaluation scope below:
+          </p>
+
+          <div className="dataset-tiles-grid">
+            {/* Tile 1: Fast Sample */}
+            <div className={`dataset-tile ${selectedPreset === 'sample_1.7k' ? 'active' : ''}`}>
+              <div className="dataset-tile-header">
+                <span className="dataset-tile-title">Fast Retail Sample</span>
+                <span className="pill-badge primary" style={{ fontSize: '10px', padding: '2px 8px' }}>Recommended Demo</span>
+              </div>
+              <div className="dataset-tile-count">1,710 Baskets</div>
+              <div className="dataset-tile-desc">
+                Balanced retail sample (~50k raw rows) capturing top seasonal products. Provides fast sub-second execution for FP-Growth and ~10–20s for Apriori.
+              </div>
+            </div>
+
+            {/* Tile 2: Full Cleaned Dataset */}
+            <div className={`dataset-tile ${selectedPreset === 'full_36k' ? 'active' : ''}`}>
+              <div className="dataset-tile-header">
+                <span className="dataset-tile-title">Full Cleaned Dataset</span>
+                <span className="pill-badge neutral" style={{ fontSize: '10px', padding: '2px 8px' }}>Comprehensive</span>
+              </div>
+              <div className="dataset-tile-count">36,307 Baskets</div>
+              <div className="dataset-tile-desc">
+                All multi-item transactions extracted from the full 1.06M raw records across the 2-year retail period (5,336 unique catalog items).
+              </div>
+            </div>
+
+            {/* Tile 3: Textbook Dataset */}
+            <div className={`dataset-tile ${selectedPreset === 'toy_5' ? 'active' : ''}`}>
+              <div className="dataset-tile-header">
+                <span className="dataset-tile-title">Textbook Verification Sample</span>
+                <span className="pill-badge neutral" style={{ fontSize: '10px', padding: '2px 8px' }}>Correctness Test</span>
+              </div>
+              <div className="dataset-tile-count">5 Baskets</div>
+              <div className="dataset-tile-desc">
+                Standard 5-transaction textbook example (Bread, Milk, Diaper, Beer) with manually verified ground-truth values for professor evaluation.
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* SECTION C: Analysis Configuration */}
+        <section className="section-card">
+          <div className="card-title-row">
+            <div className="card-title">
+              <Sliders className="card-title-icon" size={19} />
+              Analysis Parameters & Algorithm Configuration
+            </div>
+            <span className="card-caption">Configure exact mathematical thresholds</span>
+          </div>
+
+          <div className="config-grid">
+            {/* Dataset Scale Selector */}
+            <div className="form-field">
+              <label className="field-label" htmlFor="dataset-preset-select">
                 <span>Dataset Scale</span>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Transaction Scope</span>
+                <span className="field-hint">Scope of Baskets</span>
               </label>
               <select
+                id="dataset-preset-select"
                 className="form-select"
                 value={selectedPreset}
-                onChange={(e) => setSelectedPreset(e.target.value)}
+                onChange={(e) => handlePresetChange(e.target.value)}
                 disabled={isAnalyzing}
               >
                 <option value="sample_1.7k">Fast Retail Sample (1,710 Baskets - Recommended)</option>
-                <option value="full_36k">Full Retail Dataset (36,307 Cleaned Baskets)</option>
+                <option value="full_36k">Full Cleaned Retail Dataset (36,307 Baskets)</option>
                 <option value="toy_5">Textbook Verification Dataset (5 Baskets)</option>
               </select>
             </div>
 
-            {/* Algorithm Switcher */}
-            <div className="form-group">
-              <label className="form-label">
-                <span>Mining Algorithm</span>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Execution Engine</span>
+            {/* Algorithm Selector */}
+            <div className="form-field">
+              <label className="field-label">
+                <span>Algorithm Selection</span>
+                <span className="field-hint">Mining Engine</span>
               </label>
-              <div className="segmented-control">
+              <div className="segmented-picker">
                 <button
                   type="button"
-                  className={`segmented-btn ${selectedAlgo === 'apriori' ? 'active' : ''}`}
+                  className={`segmented-option ${selectedAlgo === 'apriori' ? 'active' : ''}`}
                   onClick={() => setSelectedAlgo('apriori')}
                   disabled={isAnalyzing}
                 >
@@ -253,7 +389,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className={`segmented-btn ${selectedAlgo === 'fpgrowth' ? 'active' : ''}`}
+                  className={`segmented-option ${selectedAlgo === 'fpgrowth' ? 'active' : ''}`}
                   onClick={() => setSelectedAlgo('fpgrowth')}
                   disabled={isAnalyzing}
                 >
@@ -261,7 +397,7 @@ export default function App() {
                 </button>
                 <button
                   type="button"
-                  className={`segmented-btn ${selectedAlgo === 'compare' ? 'active' : ''}`}
+                  className={`segmented-option ${selectedAlgo === 'compare' ? 'active' : ''}`}
                   onClick={() => setSelectedAlgo('compare')}
                   disabled={isAnalyzing}
                 >
@@ -270,147 +406,176 @@ export default function App() {
               </div>
             </div>
 
-            {/* Min Support Slider */}
-            <div className="form-group">
-              <div className="form-label">
-                <span>Min Support (%)</span>
-                <span className="slider-value">{minSupport}%</span>
-              </div>
-              <div className="slider-container">
+            {/* Minimum Support Numeric Input */}
+            <div className="form-field">
+              <label className="field-label" htmlFor="input-support">
+                <span>Minimum Support</span>
+                <span className="field-hint">Frequency Threshold</span>
+              </label>
+              <div className="input-affix-group">
                 <input
-                  type="range"
-                  className="slider-input"
-                  min="0.5"
-                  max="15.0"
-                  step="0.5"
+                  id="input-support"
+                  type="number"
+                  className={`form-input ${inputErrors.support ? 'error' : ''}`}
+                  step="0.1"
+                  min="0.01"
+                  max="100"
                   value={minSupport}
                   onChange={(e) => setMinSupport(e.target.value)}
+                  onBlur={validateInputs}
                   disabled={isAnalyzing}
+                  placeholder="e.g. 2.0"
                 />
+                <span className="input-affix">%</span>
               </div>
+              {inputErrors.support && <span className="field-error-msg">{inputErrors.support}</span>}
             </div>
 
-            {/* Min Confidence Slider */}
-            <div className="form-group">
-              <div className="form-label">
-                <span>Min Confidence (%)</span>
-                <span className="slider-value">{minConfidence}%</span>
-              </div>
-              <div className="slider-container">
+            {/* Minimum Confidence Numeric Input */}
+            <div className="form-field">
+              <label className="field-label" htmlFor="input-confidence">
+                <span>Minimum Confidence</span>
+                <span className="field-hint">Rule Reliability</span>
+              </label>
+              <div className="input-affix-group">
                 <input
-                  type="range"
-                  className="slider-input"
-                  min="10"
-                  max="90"
-                  step="5"
+                  id="input-confidence"
+                  type="number"
+                  className={`form-input ${inputErrors.confidence ? 'error' : ''}`}
+                  step="1"
+                  min="0.01"
+                  max="100"
                   value={minConfidence}
                   onChange={(e) => setMinConfidence(e.target.value)}
+                  onBlur={validateInputs}
                   disabled={isAnalyzing}
+                  placeholder="e.g. 50"
                 />
+                <span className="input-affix">%</span>
               </div>
+              {inputErrors.confidence && <span className="field-error-msg">{inputErrors.confidence}</span>}
             </div>
 
-            {/* Min Lift Input */}
-            <div className="form-group">
-              <div className="form-label">
-                <span>Min Lift Ratio</span>
-                <span className="slider-value">{minLift}x</span>
-              </div>
-              <div className="slider-container">
+            {/* Minimum Lift Numeric Input */}
+            <div className="form-field">
+              <label className="field-label" htmlFor="input-lift">
+                <span>Minimum Lift</span>
+                <span className="field-hint">Strength of Association</span>
+              </label>
+              <div className="input-affix-group">
                 <input
-                  type="range"
-                  className="slider-input"
-                  min="1.0"
-                  max="5.0"
+                  id="input-lift"
+                  type="number"
+                  className={`form-input ${inputErrors.lift ? 'error' : ''}`}
                   step="0.1"
+                  min="0"
                   value={minLift}
                   onChange={(e) => setMinLift(e.target.value)}
+                  onBlur={validateInputs}
                   disabled={isAnalyzing}
+                  placeholder="e.g. 1.2"
                 />
+                <span className="input-affix">ratio</span>
               </div>
+              {inputErrors.lift && <span className="field-error-msg">{inputErrors.lift}</span>}
             </div>
           </div>
 
-          {/* Action Button */}
-          <div className="actions-bar">
+          {/* Action Toolbar */}
+          <div className="action-toolbar">
+            <div className="action-status-hint">
+              <Info size={15} />
+              <span>
+                {selectedAlgo === 'compare'
+                  ? 'Both Apriori and FP-Growth will execute on the exact same transactions.'
+                  : `Running custom ${selectedAlgo === 'apriori' ? 'Apriori' : 'FP-Growth'} mining engine.`}
+              </span>
+            </div>
+
             <button
-              className="btn-primary"
+              className="btn-run"
               onClick={handleRunAnalysis}
               disabled={isAnalyzing}
             >
               {isAnalyzing ? (
                 <>
-                  <Clock className="animate-spin" size={18} /> Mining Patterns...
+                  <Clock size={16} className="animate-spin" /> Computing Patterns...
                 </>
               ) : (
                 <>
-                  <Play size={18} /> Run Market Basket Analysis
+                  <Play size={16} /> Run Market Basket Analysis
                 </>
               )}
             </button>
           </div>
         </section>
 
-        {/* Results Overview */}
+        {/* SECTION D: Results Dashboard */}
         {analysisResult && (
           <>
-            {/* KPI Cards */}
-            <div className="kpi-grid">
-              <div className="kpi-card">
-                <div className="kpi-icon blue">
-                  <ShoppingCart size={24} />
+            {/* KPI Summary Tiles */}
+            <div className="kpi-row">
+              <div className="kpi-tile">
+                <div className="kpi-tile-icon indigo">
+                  <ShoppingCart size={22} />
                 </div>
                 <div>
-                  <div className="kpi-value">{analysisResult.parameters.baskets_analyzed.toLocaleString()}</div>
-                  <div className="kpi-label">Baskets Analyzed</div>
+                  <div className="kpi-tile-value">
+                    {analysisResult.parameters.baskets_analyzed.toLocaleString()}
+                  </div>
+                  <div className="kpi-tile-label">Baskets Analyzed</div>
                 </div>
               </div>
 
-              <div className="kpi-card">
-                <div className="kpi-icon green">
-                  <Layers size={24} />
+              <div className="kpi-tile">
+                <div className="kpi-tile-icon teal">
+                  <Layers size={22} />
                 </div>
                 <div>
-                  <div className="kpi-value">{analysisResult.frequent_itemsets.total_count.toLocaleString()}</div>
-                  <div className="kpi-label">Frequent Itemsets</div>
+                  <div className="kpi-tile-value">
+                    {analysisResult.frequent_itemsets.total_count.toLocaleString()}
+                  </div>
+                  <div className="kpi-tile-label">Frequent Itemsets</div>
                 </div>
               </div>
 
-              <div className="kpi-card">
-                <div className="kpi-icon amber">
-                  <Sparkles size={24} />
+              <div className="kpi-tile">
+                <div className="kpi-tile-icon amber">
+                  <Sparkles size={22} />
                 </div>
                 <div>
-                  <div className="kpi-value">{analysisResult.association_rules.total_count.toLocaleString()}</div>
-                  <div className="kpi-label">Association Rules</div>
+                  <div className="kpi-tile-value">
+                    {analysisResult.association_rules.total_count.toLocaleString()}
+                  </div>
+                  <div className="kpi-tile-label">Association Rules</div>
                 </div>
               </div>
 
-              <div className="kpi-card">
-                <div className="kpi-icon purple">
-                  <Clock size={24} />
+              <div className="kpi-tile">
+                <div className="kpi-tile-icon violet">
+                  <Clock size={22} />
                 </div>
                 <div>
-                  <div className="kpi-value">
+                  <div className="kpi-tile-value">
                     {analysisResult.parameters.algorithm === 'compare'
                       ? `${analysisResult.benchmark.fpgrowth_time_seconds}s`
                       : `${analysisResult.frequent_itemsets.execution_time_seconds}s`}
                   </div>
-                  <div className="kpi-label">
-                    {analysisResult.parameters.algorithm === 'compare' ? 'FP-Growth Speed' : 'Execution Time'}
+                  <div className="kpi-tile-label">
+                    {analysisResult.parameters.algorithm === 'compare' ? 'FP-Growth Runtime' : 'Execution Runtime'}
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Visualizations (Recharts) */}
-            <div className="charts-grid">
-              {/* Benchmark chart if Compare mode */}
+            {/* Visualizations Section */}
+            <div className="viz-grid">
+              {/* Chart 1: Performance Benchmark (Visible when Compare Both is chosen) */}
               {chartBenchmarkData.length > 0 && (
-                <div className="chart-card">
-                  <div className="chart-title">
-                    <span>Algorithm Execution Benchmark</span>
-                    <span style={{ fontSize: '12px', color: '#16a34a', fontWeight: 'bold' }}>
+                <div className="viz-card">
+                  <div className="viz-card-header">
+                    <span className="viz-card-title">Algorithm Runtime Benchmark</span>
+                    <span className="pill-badge" style={{ backgroundColor: 'var(--teal-light)', color: 'var(--teal-hover)' }}>
                       {analysisResult.benchmark.speedup_factor}x Speedup
                     </span>
                   </div>
@@ -420,7 +585,7 @@ export default function App() {
                         <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                         <XAxis type="number" unit="s" />
                         <YAxis type="category" dataKey="algorithm" />
-                        <Tooltip formatter={(value) => [`${value} seconds`, 'Runtime']} />
+                        <Tooltip formatter={(value) => [`${value}s`, 'Runtime']} />
                         <Bar dataKey="Execution Time (s)" />
                       </BarChart>
                     </ResponsiveContainer>
@@ -428,12 +593,12 @@ export default function App() {
                 </div>
               )}
 
-              {/* Top Rules Lift Chart */}
+              {/* Chart 2: Top Association Rules by Lift */}
               {chartTopRules.length > 0 && (
-                <div className="chart-card">
-                  <div className="chart-title">
-                    <span>Top Association Rules by Lift</span>
-                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Strength of Relationship</span>
+                <div className="viz-card">
+                  <div className="viz-card-header">
+                    <span className="viz-card-title">Top Association Rules by Lift Ratio</span>
+                    <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Cross-Sell Strength</span>
                   </div>
                   <div style={{ height: 260 }}>
                     <ResponsiveContainer width="100%" height="100%">
@@ -442,7 +607,7 @@ export default function App() {
                         <XAxis dataKey="name" angle={-25} textAnchor="end" height={50} interval={0} fontSize={11} />
                         <YAxis />
                         <Tooltip />
-                        <Bar dataKey="lift" fill="#4f46e5" name="Lift Ratio" />
+                        <Bar dataKey="lift" fill="#4338ca" name="Lift Ratio" />
                       </BarChart>
                     </ResponsiveContainer>
                   </div>
@@ -450,43 +615,49 @@ export default function App() {
               )}
             </div>
 
-            {/* Association Rules Table */}
-            <section className="card">
-              <div className="section-header">
+            {/* SECTION E: Association Rules & Filtering */}
+            <section className="section-card">
+              <div className="card-title-row">
                 <div>
-                  <div className="section-title">
-                    <Sparkles size={20} color="var(--primary)" />
-                    Mined Association Rules (Cross-Sell Recommendations)
+                  <div className="card-title">
+                    <Sparkles className="card-title-icon" size={19} />
+                    Mined Association Rules (Product Recommendations)
                   </div>
-                  <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    Identifies product combinations where purchasing items in the <strong>Antecedent</strong> strongly predicts buying the <strong>Consequent</strong>.
-                  </p>
+                  <span className="card-caption">
+                    Customers who bought items in the <strong>Antecedent</strong> are likely to also purchase the <strong>Consequent</strong>.
+                  </span>
                 </div>
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <input
-                    type="text"
-                    placeholder="Search products in rules..."
-                    className="form-input"
-                    style={{ width: '220px', padding: '6px 12px', fontSize: '13px' }}
-                    value={ruleSearch}
-                    onChange={(e) => setRuleSearch(e.target.value)}
-                  />
+
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  <div style={{ position: 'relative' }}>
+                    <input
+                      type="text"
+                      className="form-input"
+                      placeholder="Search product in rules..."
+                      value={ruleSearch}
+                      onChange={(e) => setRuleSearch(e.target.value)}
+                      style={{ paddingLeft: '32px', width: '230px', paddingRight: '10px', fontSize: '13px' }}
+                    />
+                    <Search size={15} style={{ position: 'absolute', left: '10px', top: '11px', color: '#94a3b8' }} />
+                  </div>
+
                   <button
-                    className="btn-secondary"
+                    className="btn-export"
                     onClick={handleExportCSV}
-                    disabled={isExporting || analysisResult.association_rules.total_count === 0}
+                    disabled={isExporting || activeRules.length === 0}
                   >
-                    <Download size={16} /> {isExporting ? 'Exporting...' : 'Export CSV'}
+                    <Download size={15} />
+                    {isExporting ? 'Exporting...' : 'Export CSV'}
                   </button>
                 </div>
               </div>
 
               {filteredRules.length > 0 ? (
-                <div className="table-container">
-                  <table className="custom-table">
+                <div className="table-wrapper">
+                  <table className="data-table">
                     <thead>
                       <tr>
-                        <th style={{ width: '60px' }}>#</th>
+                        <th style={{ width: '50px' }}>#</th>
                         <th>Antecedent (Customer Bought)</th>
                         <th style={{ width: '40px', textAlign: 'center' }}></th>
                         <th>Consequent (Recommended Next)</th>
@@ -501,28 +672,28 @@ export default function App() {
                           <td style={{ color: 'var(--text-muted)', fontWeight: 600 }}>{idx + 1}</td>
                           <td>
                             {rule.antecedent.map((item, i) => (
-                              <span key={i} className="item-tag">{item}</span>
+                              <span key={i} className="product-tag">{item}</span>
                             ))}
                           </td>
                           <td style={{ textAlign: 'center', color: 'var(--primary)' }}>
-                            <ArrowRight size={16} />
+                            <ArrowRight size={15} />
                           </td>
                           <td>
                             {rule.consequent.map((item, i) => (
-                              <span key={i} className="item-tag consequent">{item}</span>
+                              <span key={i} className="product-tag consequent">{item}</span>
                             ))}
                           </td>
                           <td>
-                            <strong>{(rule.support * 100).toFixed(2)}%</strong>
-                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>({rule.support_count} orders)</div>
+                            <span className="metric-highlight">{(rule.support * 100).toFixed(2)}%</span>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>({rule.support_count} baskets)</div>
                           </td>
                           <td>
-                            <strong style={{ color: rule.confidence_percent >= 70 ? '#059669' : 'var(--text-main)' }}>
+                            <span className="metric-highlight" style={{ color: rule.confidence_percent >= 70 ? 'var(--emerald)' : 'var(--navy-900)' }}>
                               {rule.confidence_percent.toFixed(1)}%
-                            </strong>
+                            </span>
                           </td>
                           <td>
-                            <span className={`lift-badge ${rule.lift >= 15 ? 'high' : rule.lift >= 5 ? 'medium' : 'standard'}`}>
+                            <span className={`lift-pill ${rule.lift >= 15 ? 'high' : rule.lift >= 5 ? 'medium' : 'standard'}`}>
                               {rule.lift.toFixed(2)}x
                             </span>
                           </td>
@@ -531,54 +702,61 @@ export default function App() {
                     </tbody>
                   </table>
                   {filteredRules.length > 50 && (
-                    <div style={{ padding: '12px 16px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
-                      Showing top 50 rules of {filteredRules.length}. Export to CSV to view all rules.
+                    <div style={{ padding: '12px 16px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', backgroundColor: '#f8fafc' }}>
+                      Showing top 50 rules of {filteredRules.length}. Click 'Export CSV' to download all mined rules.
                     </div>
                   )}
                 </div>
               ) : (
-                <div className="empty-state">
-                  <ShoppingCart className="empty-state-icon" />
-                  <div className="empty-state-title">No Association Rules Found</div>
-                  <div className="empty-state-desc">
-                    No rules satisfy the current minimum confidence ({minConfidence}%) and lift ({minLift}x).
-                    Try adjusting the parameters in the control panel above.
+                <div className="state-empty">
+                  <ShoppingCart className="state-empty-icon" />
+                  <div className="state-empty-title">No Matching Association Rules</div>
+                  <div className="state-empty-text">
+                    {ruleSearch ? (
+                      `No rules found matching "${ruleSearch}". Try clearing your search keyword.`
+                    ) : (
+                      `No rules satisfy Minimum Confidence of ${minConfidence}% and Minimum Lift of ${minLift}x. Try lowering these thresholds in the controls above.`
+                    )}
                   </div>
                 </div>
               )}
             </section>
 
             {/* Frequent Itemsets Table */}
-            <section className="card">
-              <div className="section-header">
+            <section className="section-card">
+              <div className="card-title-row">
                 <div>
-                  <div className="section-title">
-                    <Layers size={20} color="var(--primary)" />
-                    Frequent Itemsets
+                  <div className="card-title">
+                    <Layers className="card-title-icon" size={19} />
+                    Discovered Frequent Itemsets
                   </div>
-                  <p style={{ fontSize: '13px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                    Product bundles meeting or exceeding the minimum support threshold ({minSupport}%).
-                  </p>
+                  <span className="card-caption">
+                    Product combinations meeting or exceeding Minimum Support ({minSupport}%).
+                  </span>
                 </div>
-                <input
-                  type="text"
-                  placeholder="Search itemsets..."
-                  className="form-input"
-                  style={{ width: '220px', padding: '6px 12px', fontSize: '13px' }}
-                  value={itemsetSearch}
-                  onChange={(e) => setItemsetSearch(e.target.value)}
-                />
+
+                <div style={{ position: 'relative' }}>
+                  <input
+                    type="text"
+                    className="form-input"
+                    placeholder="Search itemsets..."
+                    value={itemsetSearch}
+                    onChange={(e) => setItemsetSearch(e.target.value)}
+                    style={{ paddingLeft: '32px', width: '220px', paddingRight: '10px', fontSize: '13px' }}
+                  />
+                  <Search size={15} style={{ position: 'absolute', left: '10px', top: '11px', color: '#94a3b8' }} />
+                </div>
               </div>
 
               {filteredItemsets.length > 0 ? (
-                <div className="table-container">
-                  <table className="custom-table">
+                <div className="table-wrapper">
+                  <table className="data-table">
                     <thead>
                       <tr>
-                        <th style={{ width: '60px' }}>#</th>
-                        <th>Itemset Products</th>
-                        <th style={{ width: '100px' }}>Size</th>
-                        <th style={{ width: '120px' }}>Basket Count</th>
+                        <th style={{ width: '50px' }}>#</th>
+                        <th>Product Items</th>
+                        <th style={{ width: '100px' }}>Itemset Size</th>
+                        <th style={{ width: '140px' }}>Basket Support Count</th>
                         <th style={{ width: '120px' }}>Support %</th>
                       </tr>
                     </thead>
@@ -588,34 +766,38 @@ export default function App() {
                           <td style={{ color: 'var(--text-muted)', fontWeight: 600 }}>{idx + 1}</td>
                           <td>
                             {itemset.items.map((item, i) => (
-                              <span key={i} className="item-tag">{item}</span>
+                              <span key={i} className="product-tag">{item}</span>
                             ))}
                           </td>
                           <td>
-                            <span className="badge-tag" style={{ fontSize: '11px', padding: '2px 8px' }}>
+                            <span className="pill-badge neutral" style={{ fontSize: '11px', padding: '2px 8px' }}>
                               {itemset.size} {itemset.size === 1 ? 'item' : 'items'}
                             </span>
                           </td>
-                          <td style={{ fontWeight: 600 }}>{itemset.support_count.toLocaleString()}</td>
+                          <td style={{ fontWeight: 600 }}>
+                            {itemset.support_count.toLocaleString()}
+                          </td>
                           <td>
-                            <strong style={{ color: 'var(--primary-dark)' }}>{itemset.support_percent.toFixed(2)}%</strong>
+                            <span className="metric-highlight" style={{ color: 'var(--primary)' }}>
+                              {itemset.support_percent.toFixed(2)}%
+                            </span>
                           </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                   {filteredItemsets.length > 50 && (
-                    <div style={{ padding: '12px 16px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center' }}>
+                    <div style={{ padding: '12px 16px', fontSize: '12px', color: 'var(--text-muted)', textAlign: 'center', backgroundColor: '#f8fafc' }}>
                       Showing top 50 itemsets of {filteredItemsets.length}.
                     </div>
                   )}
                 </div>
               ) : (
-                <div className="empty-state">
-                  <Layers className="empty-state-icon" />
-                  <div className="empty-state-title">No Frequent Itemsets Discovered</div>
-                  <div className="empty-state-desc">
-                    Lower the minimum support threshold to discover product bundles.
+                <div className="state-empty">
+                  <Layers className="state-empty-icon" />
+                  <div className="state-empty-title">No Frequent Itemsets Found</div>
+                  <div className="state-empty-text">
+                    No product bundles meet the current Minimum Support threshold of {minSupport}%. Try entering a lower percentage.
                   </div>
                 </div>
               )}
