@@ -1,0 +1,36 @@
+{
+  "metadata": {
+    "description": "Textbook synthetic dataset for algorithm correctness"
+  },
+  "basket_count": 5,
+  "baskets": [
+    [
+      "Bread",
+      "Milk"
+    ],
+    [
+      "Bread",
+      "Diaper",
+      "Beer",
+      "Eggs"
+    ],
+    [
+      "Milk",
+      "Diaper",
+      "Beer",
+      "Cola"
+    ],
+    [
+      "Bread",
+      "Milk",
+      "Diaper",
+      "Beer"
+    ],
+    [
+      "Bread",
+      "Milk",
+      "Diaper",
+      "Cola"
+    ]
+  ]
+}

@@ -1,0 +1,6 @@
+pandas>=2.2.0
+numpy>=2.0.0
+flask>=3.0.0
+flask-cors>=4.0.0
+mlxtend>=0.23.0
+pytest>=8.0.0
